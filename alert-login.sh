@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # --- Load environment configuration ---
-# Expected .env file placed beside this script (same directory when installed)
+# Expected .alert-login.env file placed beside this script (same directory when installed)
 # Variables: ALERT_TYPES (comma list: mail,slack,telegram), RECIPIENT, FROM_ADDR,
 # SLACK_WEBHOOK_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENABLE_IP_GEO
 ENV_FILE="$(dirname "$0")/.alert-login.env"
@@ -11,7 +11,7 @@ if [ -f "$ENV_FILE" ]; then
   . "$ENV_FILE"
   set +a
 else
-  logger -t alert-login "WARNING: .env file not found at $ENV_FILE; using defaults"
+  logger -t alert-login "WARNING: .alert-login.env file not found at $ENV_FILE; using defaults"
 fi
 
 # Defaults if not set
@@ -21,8 +21,8 @@ ENABLE_IP_GEO=${ENABLE_IP_GEO:-true}
 
 # Basic validation: if mail is requested ensure RECIPIENT + FROM_ADDR exist
 if echo "$ALERT_TYPES" | grep -qi 'mail'; then
-  : "${RECIPIENT:?RECIPIENT missing in .env}" || exit 1
-  : "${FROM_ADDR:?FROM_ADDR missing in .env}" || exit 1
+  : "${RECIPIENT:?RECIPIENT missing in .alert-login.env}" || exit 1
+  : "${FROM_ADDR:?FROM_ADDR missing in .alert-login.env}" || exit 1
 fi
 
 # Ensure minimal safe environment for PAM-run scripts
@@ -169,9 +169,9 @@ send_telegram_alert() {
   [ -z "${TELEGRAM_BOT_TOKEN}" ] && logger -t alert-login "Telegram bot token missing; skip" && return 1
   [ -z "${TELEGRAM_CHAT_ID}" ] && logger -t alert-login "Telegram chat id missing; skip" && return 1
   local text
-  text="🔔 SSH Alert\nUser: ${USER_NAME}\nRoot: ${ISROOT}\nIP: ${HOST}\nLocation: ${LOCATION}\nServer: ${SERVER}\nDate: ${DATE}\nSession: ${SESSION_TYPE}\nTTY: ${TTY}"
+  text="🔔 *SSH Login Alert*%0A👤 *User:* ${USER_NAME}%0A🔑 *Root:* ${ISROOT}%0A🌐 *IP:* ${HOST}%0A📍 *Location:* ${LOCATION}%0A🖥️ *Server:* ${SERVER}%0A📅 *Date:* ${DATE}%0A💻 *Session:* ${SESSION_TYPE}%0A🖲️ *TTY:* ${TTY}"
   ${CURL} -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${TELEGRAM_CHAT_ID}" -d "text=${text}" >/dev/null 2>&1 && return 0
+    -d "chat_id=${TELEGRAM_CHAT_ID}" -d "text=${text}" -d "parse_mode=Markdown" >/dev/null 2>&1 && return 0
   logger -t alert-login "Telegram notification failed"
   return 1
 }
