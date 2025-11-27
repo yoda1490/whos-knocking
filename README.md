@@ -2,7 +2,7 @@
 
 *Because you should always know who's at your SSH door!*
 
-A sophisticated SSH login alert system that sends beautiful HTML email notifications whenever someone logs into your Linux server. Get instant alerts with IP geolocation, user details, and session information.
+A SSH login alert system that sends beautiful HTML email notifications whenever someone logs into your Linux server. Get instant alerts with IP geolocation, user details, and session information.
 
 ## 🎯 Features
 
@@ -220,3 +220,4 @@ Suggestions and improvements welcome! This is a community project to help sysadm
 ---
 
 *Keep calm and monitor your servers!* 🔐
+
