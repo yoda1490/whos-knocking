@@ -3,7 +3,8 @@
 # --- Load environment configuration ---
 # Expected .alert-login.env file placed beside this script (same directory when installed)
 # Variables: ALERT_TYPES (comma list: mail,slack,telegram), RECIPIENT, FROM_ADDR,
-# SLACK_WEBHOOK_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENABLE_IP_GEO
+# SLACK_WEBHOOK_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENABLE_IP_GEO,
+# ALERT_EXCLUSIONS (pipe-separated list of "IP:USER" patterns to exclude from alerts)
 ENV_FILE="$(dirname "$0")/.alert-login.env"
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
@@ -18,6 +19,8 @@ fi
 ALERT_TYPES=${ALERT_TYPES:-mail}
 # Toggle IP geolocation (curl to ipinfo.io). Set to "false" to disable.
 ENABLE_IP_GEO=${ENABLE_IP_GEO:-true}
+# Alert exclusions: pipe-separated list of "IP:USER" patterns (supports wildcards: * for any, 192.168.1.* for subnet)
+ALERT_EXCLUSIONS=${ALERT_EXCLUSIONS:-}
 
 # Basic validation: if mail is requested ensure RECIPIENT + FROM_ADDR exist
 if echo "$ALERT_TYPES" | grep -qi 'mail'; then
@@ -58,6 +61,63 @@ CURL="/usr/bin/curl"
 SENDMAIL="/usr/sbin/sendmail"
 MAILX="/usr/bin/mailx"
 
+# --- Check if connection matches exclusion rules ---
+should_skip_alert() {
+  local ip="$1"
+  local user="$2"
+  local exclusion_rule
+  
+  [ -z "$ALERT_EXCLUSIONS" ] && return 1  # No exclusions, don't skip
+  
+  # Parse pipe-separated exclusion rules
+  IFS='|' read -r -a exclusion_array <<< "$ALERT_EXCLUSIONS"
+  for rule in "${exclusion_array[@]}"; do
+    rule=$(echo "$rule" | xargs)  # Trim whitespace
+    [ -z "$rule" ] && continue
+    
+    # Extract IP and USER patterns from "IP:USER" format
+    local rule_ip="${rule%%:*}"
+    local rule_user="${rule##*:}"
+    
+    # Match IP pattern (support wildcards: * for any, 192.168.1.* for subnets)
+    local ip_match=0
+    if [ "$rule_ip" = "*" ]; then
+      ip_match=1
+    elif [[ "$rule_ip" == *"*"* ]]; then
+      # Convert wildcard pattern to regex: 192.168.1.* -> 192\.168\.1\..*
+      local pattern="^${rule_ip//\./\\.}$"
+      pattern="${pattern//'*'/.*}"
+      if [[ "$ip" =~ $pattern ]]; then
+        ip_match=1
+      fi
+    elif [ "$rule_ip" = "$ip" ]; then
+      ip_match=1
+    fi
+    
+    # Match USER pattern (support wildcards: * for any, admin* for prefix)
+    local user_match=0
+    if [ "$rule_user" = "*" ]; then
+      user_match=1
+    elif [[ "$rule_user" == *"*"* ]]; then
+      # Convert wildcard pattern to regex
+      local pattern="^${rule_user//'*'/.*}$"
+      if [[ "$user" =~ $pattern ]]; then
+        user_match=1
+      fi
+    elif [ "$rule_user" = "$user" ]; then
+      user_match=1
+    fi
+    
+    # If both IP and USER match the rule, skip alert
+    if [ "$ip_match" -eq 1 ] && [ "$user_match" -eq 1 ]; then
+      logger -t alert-login "Skipping alert: matched exclusion rule '$rule' (IP:USER = $ip:$user)"
+      return 0  # Skip alert
+    fi
+  done
+  
+  return 1  # Don't skip
+}
+
 # --- IP Geolocation ---
 if [ "$HOST" != "localhost" ]; then
   if [ "$ENABLE_IP_GEO" = "true" ] || [ "$ENABLE_IP_GEO" = "1" ]; then
@@ -71,6 +131,11 @@ if [ "$HOST" != "localhost" ]; then
   fi
 else
   LOCATION="Localhost / Internal connection"
+fi
+
+# --- Check exclusion rules before proceeding ---
+if should_skip_alert "$HOST" "$USER_NAME"; then
+  exit 0
 fi
 
 # --- Email subject ---
@@ -169,7 +234,7 @@ send_telegram_alert() {
   [ -z "${TELEGRAM_BOT_TOKEN}" ] && logger -t alert-login "Telegram bot token missing; skip" && return 1
   [ -z "${TELEGRAM_CHAT_ID}" ] && logger -t alert-login "Telegram chat id missing; skip" && return 1
   local text
-  text="🔔 *SSH Login Alert*%0A👤 *User:* ${USER_NAME}%0A🔑 *Root:* ${ISROOT}%0A🌐 *IP:* ${HOST}%0A📍 *Location:* ${LOCATION}%0A🖥️ *Server:* ${SERVER}%0A📅 *Date:* ${DATE}%0A💻 *Session:* ${SESSION_TYPE}%0A🖲️ *TTY:* ${TTY}"
+  text="🔔 *SSH Login Alert*%0A👤 *User:* ${USER_NAME}%0A🔑 *Root:* ${ISROOT}%0A🌐 *IP:* ${HOST}%0A📍 *Location:* ${LOCATION}%0A🖥️ *Server:* ${SERVER}%0A📅 *Date:* ${DATE}%0A💻 *Session:* ${SESSION_TYPE}%0A🔗 *TTY:* ${TTY}"
   ${CURL} -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     -d "chat_id=${TELEGRAM_CHAT_ID}" -d "text=${text}" -d "parse_mode=Markdown" >/dev/null 2>&1 && return 0
   logger -t alert-login "Telegram notification failed"
